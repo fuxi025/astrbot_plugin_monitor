@@ -1,22 +1,16 @@
 import asyncio
 import re
-from astrbot import logger
+
+from astrbot.api import logger
 from astrbot.api.event import filter
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 from astrbot.core.message.components import Reply
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
 
 
-@register(
-    "astrbot_plugin_monitor",
-    "Zhalslar",
-    "[仅aiocqhttp] 群消息互通插件",
-    "v1.0.2",
-    "https://github.com/Zhalslar/astrbot_plugin_monitor",
-)
-class Relationship(Star):
+class MonitorPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
         # 监听群 -> 被监听群
@@ -56,7 +50,7 @@ class Relationship(Star):
 
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("抽查")
+    @filter.command("抽消息")
     async def check_messages(
         self,
         event: AiocqhttpMessageEvent,
