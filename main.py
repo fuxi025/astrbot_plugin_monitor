@@ -4,7 +4,7 @@ import re
 from astrbot.api import logger
 from astrbot.api.event import filter
 from astrbot.api.star import Context, Star
-from astrbot.core.message.components import Reply
+from astrbot.core.message.components import Reply, Image
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
@@ -27,51 +27,24 @@ class MonitorPlugin(Star):
         ref_text = reply_seg.message_str if reply_seg else ""
         return self.extract_group_ids(ref_text or event.message_str)
 
-    def extract_image_from_message_str(self, message_str: str) -> list[str]:
-        """从消息字符串中提取图片URL (CQ码格式)"""
-        if not message_str:
-            return []
-        try:
-            # 提取 CQ:image 码中的文件信息
-            cq_image_pattern = r"\[CQ:image,file=([^\]]+)\]"
-            matches = re.findall(cq_image_pattern, message_str)
-            return matches
-        except Exception as e:
-            logger.warning(f"提取图片失败: {e}")
-            return []
-
     async def build_forward_nodes(
-        self, messages: list[dict], user_id: int | None = None, include_images: bool = True
+        self, messages: list[dict], user_id: int | None = None
     ):
-        """构建转发节点，支持文本和图片"""
+        """构建转发节点 - 保持原始逻辑"""
         nodes = []
         for msg in messages:
-            try:
-                if "sender" not in msg or "message" not in msg:
-                    continue
-                
-                if user_id and msg["sender"]["user_id"] != user_id:
-                    continue
-                
-                content = msg["message"]
-                
-                # 如果内容是字符串，直接使用（包含CQ码中的图片）
-                # 不需要额外处理，CQHTTP 会自动解析 CQ 码
-                
-                nodes.append(
-                    {
-                        "type": "node",
-                        "data": {
-                            "name": msg["sender"]["nickname"],
-                            "uin": msg["sender"]["user_id"],
-                            "content": content,
-                        },
-                    }
-                )
-            except Exception as e:
-                logger.warning(f"处理消息节点失败: {e}")
+            if user_id and msg["sender"]["user_id"] != user_id:
                 continue
-        
+            nodes.append(
+                {
+                    "type": "node",
+                    "data": {
+                        "name": msg["sender"]["nickname"],
+                        "uin": msg["sender"]["user_id"],
+                        "content": msg["message"],
+                    },
+                }
+            )
         return nodes
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -99,11 +72,7 @@ class MonitorPlugin(Star):
                 result = await event.bot.get_group_msg_history(
                     group_id=gid, count=count
                 )
-                nodes = await self.build_forward_nodes(
-                    result.get("messages", []), 
-                    user_id,
-                    include_images=True
-                )
+                nodes = await self.build_forward_nodes(result["messages"], user_id)
                 if not nodes:
                     return
                 if target_group:
@@ -177,7 +146,7 @@ class MonitorPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AiocqhttpMessageEvent):
-        """实时转发被监听群的消息（包括图片）"""
+        """实时转发被监听群的消息（支持图片）"""
         if not event.message_str or any(isinstance(seg, Reply) for seg in event.get_messages()):
             return
         group_id = event.get_group_id()
@@ -193,8 +162,17 @@ class MonitorPlugin(Star):
             return
         
         sender_name = event.get_sender_name()
-        # 获取消息，保留 CQ 码（包括图片）
         forward_msg = f"[来自群{group_id}的{sender_name}]\n{event.message_str}"
+        
+        # ✅ 关键改动：从消息链中提取图片
+        messages = event.get_messages()
+        for seg in messages:
+            # 检查是否是 Image 对象
+            if isinstance(seg, Image):
+                # Image 对象有 url 属性
+                if hasattr(seg, 'url') and seg.url:
+                    # 追加图片 CQ 码
+                    forward_msg += f"\n[CQ:image,file={seg.url}]"
 
         for from_gid in listeners:
             try:
