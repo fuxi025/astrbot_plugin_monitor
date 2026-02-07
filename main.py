@@ -27,32 +27,18 @@ class MonitorPlugin(Star):
         ref_text = reply_seg.message_str if reply_seg else ""
         return self.extract_group_ids(ref_text or event.message_str)
 
-    def extract_image_urls(self, message_data: dict) -> list[str]:
-        """从消息数据中提取图片URL"""
-        image_urls = []
+    def extract_image_from_message_str(self, message_str: str) -> list[str]:
+        """从消息字符串中提取图片URL (CQ码格式)"""
+        if not message_str:
+            return []
         try:
-            if "message" not in message_data:
-                return image_urls
-
-            msg_content = message_data["message"]
-            
-            # 处理消息链格式（列表）
-            if isinstance(msg_content, list):
-                for segment in msg_content:
-                    if isinstance(segment, dict) and segment.get("type") == "image":
-                        data = segment.get("data", {})
-                        url = data.get("url") or data.get("file")
-                        if url:
-                            image_urls.append(url)
-            # 处理 CQ 码格式（字符串）
-            elif isinstance(msg_content, str):
-                cq_image_pattern = r"\[CQ:image,file=([^\]]+)\]"
-                matches = re.findall(cq_image_pattern, msg_content)
-                image_urls.extend(matches)
+            # 提取 CQ:image 码中的文件信息
+            cq_image_pattern = r"\[CQ:image,file=([^\]]+)\]"
+            matches = re.findall(cq_image_pattern, message_str)
+            return matches
         except Exception as e:
-            logger.warning(f"提取图片URL失败: {e}")
-        
-        return image_urls
+            logger.warning(f"提取图片失败: {e}")
+            return []
 
     async def build_forward_nodes(
         self, messages: list[dict], user_id: int | None = None, include_images: bool = True
@@ -69,15 +55,8 @@ class MonitorPlugin(Star):
                 
                 content = msg["message"]
                 
-                # 提取图片并添加到消息内容
-                if include_images:
-                    image_urls = self.extract_image_urls(msg)
-                    if image_urls:
-                        # 如果有图片，将其追加到消息后面
-                        if isinstance(content, str):
-                            for url in image_urls:
-                                # 使用 CQ 码格式发送图片
-                                content += f"\n[CQ:image,file={url}]"
+                # 如果内容是字符串，直接使用（包含CQ码中的图片）
+                # 不需要额外处理，CQHTTP 会自动解析 CQ 码
                 
                 nodes.append(
                     {
@@ -120,10 +99,9 @@ class MonitorPlugin(Star):
                 result = await event.bot.get_group_msg_history(
                     group_id=gid, count=count
                 )
-                # 使用支持图片的方法
                 nodes = await self.build_forward_nodes(
                     result.get("messages", []), 
-                    user_id, 
+                    user_id,
                     include_images=True
                 )
                 if not nodes:
@@ -199,7 +177,7 @@ class MonitorPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AiocqhttpMessageEvent):
-        """实时转发被监听群的消息（支持图片）"""
+        """实时转发被监听群的消息（包括图片）"""
         if not event.message_str or any(isinstance(seg, Reply) for seg in event.get_messages()):
             return
         group_id = event.get_group_id()
@@ -215,20 +193,8 @@ class MonitorPlugin(Star):
             return
         
         sender_name = event.get_sender_name()
-        
-        # 获取完整消息（包括图片）
+        # 获取消息，保留 CQ 码（包括图片）
         forward_msg = f"[来自群{group_id}的{sender_name}]\n{event.message_str}"
-        
-        # 提取并添加图片
-        try:
-            messages = event.get_messages()
-            for seg in messages:
-                # 如果消息中有 Image 类型，提取图片 URL
-                if hasattr(seg, 'url') and 'Image' in seg.__class__.__name__:
-                    if seg.url:
-                        forward_msg += f"\n[CQ:image,file={seg.url}]"
-        except Exception as e:
-            logger.debug(f"提取消息中的图片失败: {e}")
 
         for from_gid in listeners:
             try:
